@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  petclass:
+    build: .
+    container_name: petclass-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATA_FILE=/app/data/server_data.json

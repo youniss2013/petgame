@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>班级宠物积分系统</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>班级宠物积分系统</h1>
+      <div class="mode-switch">
+        <label for="viewModeSelect">视图模式</label>
+        <select id="viewModeSelect">
+          <option value="teacher">教师端</option>
+          <option value="student">学生端（投屏）</option>
+        </select>
+      </div>
+      <div class="mode-switch">
+        <input id="apiBaseInput" placeholder="后端地址，如：http://127.0.0.1:8000" />
+        <input id="usernameInput" placeholder="账号" />
+        <input id="passwordInput" type="password" placeholder="密码" />
+        <input id="parentTeacherUsernameInput" placeholder="家长绑定班主任账号（家长必填）" />
+        <input id="parentChildNameInput" placeholder="家长绑定学生姓名（家长必填）" />
+        <input id="inviteCodeInput" placeholder="家长邀请码（推荐）" />
+        <input id="parentRegisterTokenInput" placeholder="家长注册口令（可一键粘贴）" />
+        <select id="parentChildIdSelect"></select>
+        <button id="loadInviteStudentsBtn" type="button">加载可选学生</button>
+        <button id="genInviteCodeBtn" type="button">生成邀请码</button>
+        <button id="copyParentTokenBtn" type="button">复制家长口令</button>
+        <button id="applyParentTokenBtn" type="button">粘贴家长口令</button>
+        <select id="roleInput">
+          <option value="teacher">班主任</option>
+          <option value="parent">家长</option>
+        </select>
+        <button id="registerBtn" type="button">注册</button>
+        <button id="loginBtn" type="button">登录</button>
+        <button id="syncNowBtn" type="button">立即同步</button>
+      </div>
+      <div class="header-actions">
+        <button id="seedDataBtn">导入示例数据</button>
+        <button id="exportBtn">导出数据</button>
+        <button id="importBtn">导入数据</button>
+        <button id="copySyncCodeBtn">复制同步码</button>
+        <button id="applySyncCodeBtn">粘贴同步码</button>
+        <input id="importFile" type="file" accept="application/json" hidden />
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel">
+        <h2>班级管理</h2>
+        <form id="classForm" class="inline-form">
+          <input id="classNameInput" placeholder="输入班级名称，如：704班" required />
+          <button type="submit">新增班级</button>
+        </form>
+        <div id="classList" class="list"></div>
+      </aside>
+
+      <section class="panel">
+        <h2>学生与分组</h2>
+        <div id="currentClassLabel" class="hint">请先选择班级</div>
+        <form id="studentForm" class="grid-form">
+          <input id="studentNameInput" placeholder="学生姓名" required />
+          <input id="studentGroupInput" placeholder="小组（可选）" />
+          <button type="submit">添加学生</button>
+        </form>
+        <div class="inline-form">
+          <textarea
+            id="batchStudentsInput"
+            rows="3"
+            placeholder="批量导入：每行一个学生，可写为 姓名,分组"
+          ></textarea>
+          <button id="batchImportBtn" type="button">批量导入</button>
+        </div>
+        <div id="studentList" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>规则与加减分</h2>
+        <form id="ruleForm" class="grid-form">
+          <input id="ruleNameInput" placeholder="规则名称，如：主动发言" required />
+          <input id="ruleScoreInput" type="number" placeholder="分值，如：1 或 -2" required />
+          <select id="ruleCategoryInput">
+            <option value="学习">学习</option>
+            <option value="行为">行为</option>
+            <option value="健康">健康</option>
+            <option value="其他">其他</option>
+          </select>
+          <button type="submit">新增规则</button>
+        </form>
+        <div id="ruleList" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>积分操作</h2>
+        <div class="grid-form">
+          <select id="scoreStudentSelect"></select>
+          <select id="scoreRuleSelect"></select>
+          <input id="scoreRemarkInput" placeholder="备注（可选）" />
+          <button id="applyRuleBtn" type="button">执行评分</button>
+        </div>
+        <div class="grid-form">
+          <input id="customScoreInput" type="number" placeholder="自定义分值" />
+          <input id="customScoreReasonInput" placeholder="原因说明" />
+          <button id="customScoreBtn" type="button">自定义加减分</button>
+        </div>
+        <div id="logList" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>宠物与成长</h2>
+        <div class="hint">学生积分会同步为宠物经验，达到升级阈值后自动升级并获得徽章。</div>
+        <div id="petList" class="pet-grid"></div>
+        <h3>升级阈值（每级所需经验）</h3>
+        <div class="inline-form">
+          <input id="levelExpInput" type="number" value="40" min="10" />
+          <button id="saveLevelExpBtn" type="button">保存阈值</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>排行榜</h2>
+        <div id="rankingList" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>进步榜与周报</h2>
+        <div class="inline-form">
+          <button id="exportWeeklyReportBtn" type="button">导出周报CSV</button>
+        </div>
+        <div id="progressRankingList" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>小卖部兑换</h2>
+        <form id="shopItemForm" class="grid-form">
+          <input id="shopItemNameInput" placeholder="奖励名称，如：免作业一次" required />
+          <input id="shopItemCostInput" type="number" placeholder="徽章消耗" required />
+          <button type="submit">新增奖励</button>
+        </form>
+        <div id="shopList" class="list"></div>
+      </section>
+    </main>
+
+    <main id="studentView" class="student-view hidden">
+      <section class="panel">
+        <h2>学生端展示</h2>
+        <div class="grid-form">
+          <select id="studentViewStudentSelect"></select>
+          <button id="studentViewRefreshBtn" type="button">刷新展示</button>
+        </div>
+        <div id="studentShowcase" class="student-showcase"></div>
+      </section>
+      <section class="panel">
+        <h2>班级进步榜（近7天）</h2>
+        <div id="studentModeProgressList" class="list"></div>
+      </section>
+    </main>
+
+    <template id="studentCardTpl">
+      <article class="card">
+        <div class="card-head">
+          <strong class="student-name"></strong>
+          <span class="student-group"></span>
+        </div>
+        <div class="card-body">
+          <div class="student-pet"></div>
+          <div class="student-stats"></div>
+        </div>
+        <div class="card-actions">
+          <button class="adopt-btn">领养/更换宠物</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="./src/app.js"></script>
+  </body>
+</html>

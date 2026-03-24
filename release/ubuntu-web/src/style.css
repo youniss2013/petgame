@@ -1,0 +1,180 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Microsoft YaHei", sans-serif;
+  background: #f6f8fb;
+  color: #222;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #e6e9ef;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.hidden {
+  display: none;
+}
+
+.student-view {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.student-showcase {
+  border: 1px solid #e6e9ef;
+  border-radius: 10px;
+  padding: 16px;
+  background: #fbfcff;
+  min-height: 120px;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #e6e9ef;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+h2,
+h3 {
+  margin: 8px 0 10px;
+}
+
+button {
+  border: 1px solid #cfd5df;
+  background: #f9fafc;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #eff3ff;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid #cfd5df;
+  border-radius: 8px;
+  padding: 8px;
+  width: 100%;
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.hint {
+  color: #666;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.row {
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: #eef3ff;
+  color: #2f5bcc;
+  font-size: 12px;
+}
+
+.card {
+  border: 1px solid #edf0f5;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.card-head,
+.card-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-body {
+  margin: 8px 0;
+}
+
+.pet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.pet-item {
+  border: 1px dashed #c9d5f0;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+  background: #f7faff;
+}
+
+.up {
+  color: #0a7d32;
+}
+
+.down {
+  color: #b42318;
+}
