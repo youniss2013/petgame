@@ -304,8 +304,9 @@ class Handler(BaseHTTPRequestHandler):
         wrapper["payload"] = state
         user["state_wrapper"] = wrapper
         if isinstance(extracted_events, list):
+            # 兼容旧客户端：如果 events 跟着 state 一起提交，只做 payload 初始化/覆盖；
+            # 不推进版本号，避免随后 PUT /api/events 的 baseEventsVersion 不匹配。
             events_wrapper = user.get("events_wrapper") or {"version": 0, "payload": [], "updated_at": 0}
-            events_wrapper["version"] = int(events_wrapper.get("version", 0)) + 1
             events_wrapper["updated_at"] = int(time.time())
             events_wrapper["payload"] = extracted_events
             user["events_wrapper"] = events_wrapper
