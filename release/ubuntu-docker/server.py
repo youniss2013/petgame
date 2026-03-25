@@ -38,6 +38,19 @@ def json_response(handler, code, data):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def merge_events_by_id(self, base_events, incoming_events):
+        base = base_events if isinstance(base_events, list) else []
+        incoming = incoming_events if isinstance(incoming_events, list) else []
+        by_id = {}
+        for ev in base:
+            if isinstance(ev, dict) and ev.get("id"):
+                by_id[ev["id"]] = ev
+        for ev in incoming:
+            if isinstance(ev, dict) and ev.get("id"):
+                by_id[ev["id"]] = ev
+        merged = list(by_id.values())
+        merged.sort(key=lambda x: int(x.get("time", 0)))
+        return merged
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -308,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
             # 不推进版本号，避免随后 PUT /api/events 的 baseEventsVersion 不匹配。
             events_wrapper = user.get("events_wrapper") or {"version": 0, "payload": [], "updated_at": 0}
             events_wrapper["updated_at"] = int(time.time())
-            events_wrapper["payload"] = extracted_events
+            events_wrapper["payload"] = self.merge_events_by_id(events_wrapper.get("payload") or [], extracted_events)
             user["events_wrapper"] = events_wrapper
         db["users"][username] = user
         save_db(db)
@@ -337,7 +350,7 @@ class Handler(BaseHTTPRequestHandler):
             })
         wrapper["version"] = current_version + 1
         wrapper["updated_at"] = int(time.time())
-        wrapper["payload"] = events
+        wrapper["payload"] = self.merge_events_by_id(wrapper.get("payload") or [], events)
         user["events_wrapper"] = wrapper
         db["users"][username] = user
         save_db(db)
