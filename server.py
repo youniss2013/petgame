@@ -58,6 +58,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/state":
             return self.handle_get_state()
+        if parsed.path == "/api/events":
+            return self.handle_get_events(parsed.query)
         if parsed.path == "/api/me":
             return self.handle_me()
         if parsed.path == "/api/public/students":
@@ -65,8 +67,11 @@ class Handler(BaseHTTPRequestHandler):
         return self.handle_static(parsed.path)
 
     def do_PUT(self):
-        if self.path == "/api/state":
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/state":
             return self.handle_put_state()
+        if parsed.path == "/api/events":
+            return self.handle_put_events()
         return json_response(self, 404, {"error": "not found"})
 
     def parse_json(self):
@@ -96,6 +101,21 @@ class Handler(BaseHTTPRequestHandler):
             "expire_at": int(time.time()) + TOKEN_TTL_SECONDS
         }
         return token
+
+    def make_weak_etag(self, payload, version):
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+        return f'W/"v{version}-{digest}"'
+
+    def maybe_not_modified(self, etag):
+        client_etag = (self.headers.get("If-None-Match") or "").strip()
+        if client_etag and client_etag == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return True
+        return False
 
     def get_auth_user(self, db):
         token = self.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -178,7 +198,14 @@ class Handler(BaseHTTPRequestHandler):
             wrapper = user.get("state_wrapper")
             if not wrapper:
                 return json_response(self, 200, {"state": None, "version": 0})
-            return json_response(self, 200, {"state": wrapper.get("payload"), "version": wrapper.get("version", 0)})
+            payload = wrapper.get("payload") or {}
+            payload.pop("events", None)
+            version = wrapper.get("version", 0)
+            etag = self.make_weak_etag(payload, version)
+            if self.maybe_not_modified(etag):
+                return
+            self.send_json_with_etag(200, {"state": payload, "version": version}, etag)
+            return
         teacher_username = user.get("parent_teacher_username")
         teacher = db["users"].get(teacher_username)
         if not teacher:
@@ -190,7 +217,63 @@ class Handler(BaseHTTPRequestHandler):
         child_name = user.get("parent_child_name", "")
         child_id = user.get("parent_child_id", "")
         filtered = self.filter_parent_view_state(teacher_state, child_name, child_id)
-        return json_response(self, 200, {"state": filtered, "version": wrapper.get("version", 0)})
+        version = wrapper.get("version", 0)
+        etag = self.make_weak_etag(filtered, version)
+        if self.maybe_not_modified(etag):
+            return
+        self.send_json_with_etag(200, {"state": filtered, "version": version}, etag)
+
+    def handle_get_events(self, query):
+        db = load_db()
+        auth = self.get_auth_user(db)
+        if not auth:
+            return json_response(self, 401, {"error": "unauthorized"})
+        _, user = auth
+        q = parse_qs(query)
+        page = max(1, int((q.get("page", ["1"])[0] or "1")))
+        page_size = max(1, min(200, int((q.get("pageSize", ["50"])[0] or "50"))))
+        role = user.get("role", "teacher")
+        if role == "teacher":
+            wrapper = self.get_user_events_wrapper(user)
+            events = wrapper.get("payload") or []
+            total = len(events)
+            start = (page - 1) * page_size
+            end = start + page_size
+            page_items = events[start:end]
+            version = wrapper.get("version", 0)
+            etag = self.make_weak_etag(page_items, version)
+            if self.maybe_not_modified(etag):
+                return
+            self.send_json_with_etag(200, {
+                "events": page_items,
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
+                "version": version
+            }, etag)
+            return
+        teacher_username = user.get("parent_teacher_username")
+        teacher = db["users"].get(teacher_username)
+        if not teacher:
+            return json_response(self, 404, {"error": "teacher not found"})
+        child_id = user.get("parent_child_id", "")
+        wrapper = self.get_user_events_wrapper(teacher)
+        events = [x for x in (wrapper.get("payload") or []) if x.get("studentId") == child_id]
+        total = len(events)
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_items = events[start:end]
+        version = wrapper.get("version", 0)
+        etag = self.make_weak_etag(page_items, version)
+        if self.maybe_not_modified(etag):
+            return
+        self.send_json_with_etag(200, {
+            "events": page_items,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "version": version
+        }, etag)
 
     def handle_put_state(self):
         db = load_db()
@@ -205,6 +288,9 @@ class Handler(BaseHTTPRequestHandler):
         base_version = int(body.get("baseVersion", 0))
         if not isinstance(state, dict):
             return json_response(self, 400, {"error": "state must be object"})
+        extracted_events = state.get("events", None)
+        state = dict(state)
+        state.pop("events", None)
         wrapper = user.get("state_wrapper") or {"version": 0, "payload": None, "updated_at": 0}
         current_version = int(wrapper.get("version", 0))
         if base_version != current_version:
@@ -217,9 +303,44 @@ class Handler(BaseHTTPRequestHandler):
         wrapper["updated_at"] = int(time.time())
         wrapper["payload"] = state
         user["state_wrapper"] = wrapper
+        if isinstance(extracted_events, list):
+            events_wrapper = user.get("events_wrapper") or {"version": 0, "payload": [], "updated_at": 0}
+            events_wrapper["version"] = int(events_wrapper.get("version", 0)) + 1
+            events_wrapper["updated_at"] = int(time.time())
+            events_wrapper["payload"] = extracted_events
+            user["events_wrapper"] = events_wrapper
         db["users"][username] = user
         save_db(db)
         return json_response(self, 200, {"ok": True, "version": wrapper["version"]})
+
+    def handle_put_events(self):
+        db = load_db()
+        auth = self.get_auth_user(db)
+        if not auth:
+            return json_response(self, 401, {"error": "unauthorized"})
+        username, user = auth
+        if user.get("role") != "teacher":
+            return json_response(self, 403, {"error": "parent read-only"})
+        body = self.parse_json()
+        events = body.get("events")
+        base_version = int(body.get("baseEventsVersion", 0))
+        if not isinstance(events, list):
+            return json_response(self, 400, {"error": "events must be array"})
+        wrapper = user.get("events_wrapper") or {"version": 0, "payload": [], "updated_at": 0}
+        current_version = int(wrapper.get("version", 0))
+        if base_version != current_version:
+            return json_response(self, 409, {
+                "error": "events version conflict",
+                "serverEventsVersion": current_version,
+                "serverEvents": wrapper.get("payload", [])
+            })
+        wrapper["version"] = current_version + 1
+        wrapper["updated_at"] = int(time.time())
+        wrapper["payload"] = events
+        user["events_wrapper"] = wrapper
+        db["users"][username] = user
+        save_db(db)
+        return json_response(self, 200, {"ok": True, "eventsVersion": wrapper["version"]})
 
     def handle_me(self):
         db = load_db()
@@ -270,6 +391,29 @@ class Handler(BaseHTTPRequestHandler):
                 })
         return json_response(self, 200, {"students": students})
 
+    def send_json_with_etag(self, code, data, etag):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def get_user_events_wrapper(self, user):
+        wrapper = user.get("events_wrapper")
+        if wrapper:
+            return wrapper
+        # 兼容旧版本：events 存放在 state payload 里。
+        payload = (user.get("state_wrapper") or {}).get("payload") or {}
+        events = payload.get("events")
+        if isinstance(events, list):
+            return {"version": 0, "payload": events, "updated_at": 0}
+        return {"version": 0, "payload": [], "updated_at": 0}
+
     def handle_static(self, path):
         if path in ("", "/"):
             return self.send_static_file("index.html", "text/html; charset=utf-8")
@@ -314,12 +458,10 @@ class Handler(BaseHTTPRequestHandler):
             if not target:
                 continue
             target_id = target.get("id")
-            logs = [x for x in cls.get("logs", []) if x.get("studentId") == target_id]
             classes.append({
                 "id": cls.get("id"),
                 "name": cls.get("name"),
-                "students": [target],
-                "logs": logs
+                "students": [target]
             })
             if not current_class_id:
                 current_class_id = cls.get("id")

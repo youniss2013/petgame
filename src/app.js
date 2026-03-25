@@ -40,6 +40,7 @@ const DEFAULT_SHOP = [
 
 const state = loadState();
 state.ui = state.ui || { viewMode: "teacher" };
+state.ui.logRenderLimit = state.ui.logRenderLimit || 30;
 state.sync = state.sync || {
   apiBase: "http://127.0.0.1:8000",
   token: "",
@@ -49,7 +50,10 @@ state.sync = state.sync || {
   parentChildName: "",
   parentChildId: "",
   inviteCode: "",
-  remoteVersion: 0
+  remoteVersion: 0,
+  eventsVersion: 0,
+  stateEtag: "",
+  eventsEtag: ""
 };
 let syncTimer = null;
 let autoSyncInterval = null;
@@ -97,6 +101,7 @@ const el = {
   customScoreReasonInput: byId("customScoreReasonInput"),
   customScoreBtn: byId("customScoreBtn"),
   logList: byId("logList"),
+  loadMoreLogsBtn: byId("loadMoreLogsBtn"),
   petList: byId("petList"),
   rankingList: byId("rankingList"),
   levelExpInput: byId("levelExpInput"),
@@ -313,7 +318,7 @@ function bindEvents() {
     const st = cls.students.find((s) => s.id === sid);
     const rule = state.rules.find((r) => r.id === rid);
     if (!st || !rule) return;
-    applyScore(st, rule.score, `规则：${rule.name}`, el.scoreRemarkInput.value.trim());
+    applyScore(st, rule.score, `规则：${rule.name}`, el.scoreRemarkInput.value.trim(), rule);
     el.scoreRemarkInput.value = "";
     saveAndRender();
   });
@@ -414,6 +419,11 @@ function bindEvents() {
 
   el.studentViewRefreshBtn.addEventListener("click", () => {
     renderStudentShowcase();
+  });
+
+  el.loadMoreLogsBtn.addEventListener("click", () => {
+    state.ui.logRenderLimit = (state.ui.logRenderLimit || 30) + 30;
+    saveAndRender();
   });
 }
 
@@ -545,8 +555,13 @@ function renderScoring() {
 function renderLogs() {
   const cls = getCurrentClass();
   el.logList.innerHTML = "";
-  if (!cls) return;
-  const logs = [...cls.logs].reverse().slice(0, 30);
+  if (!cls) {
+    el.loadMoreLogsBtn.disabled = true;
+    return;
+  }
+  const allLogs = [...getEventsForClass(cls.id)].reverse();
+  const limit = state.ui.logRenderLimit || 30;
+  const logs = allLogs.slice(0, limit);
   for (const log of logs) {
     const row = document.createElement("div");
     row.className = "row";
@@ -556,9 +571,10 @@ function renderLogs() {
       <span>${fmtTime(log.time)} ${log.studentName} ${log.delta > 0 ? "+" : ""}${log.delta}（${log.reason}）${detailText}${statusText}</span>
       <button ${log.reverted ? "disabled" : ""}>撤回</button>
     `;
-    row.querySelector("button").onclick = () => undoLog(cls, log.id);
+    row.querySelector("button").onclick = () => undoLog(log.id);
     el.logList.appendChild(row);
   }
+  el.loadMoreLogsBtn.disabled = logs.length >= allLogs.length;
 }
 
 function renderPetGallery() {
@@ -609,9 +625,8 @@ function renderShop() {
       const before = pickStudentSnapshot(st);
       st.badges -= item.cost;
       const after = pickStudentSnapshot(st);
-      cls.logs.push({
-        id: uid(),
-        time: Date.now(),
+      appendEvent({
+        classId: cls.id,
         studentId: st.id,
         studentName: st.name,
         delta: 0,
@@ -619,8 +634,7 @@ function renderShop() {
         detail: `消耗徽章 ${item.cost}`,
         before,
         after,
-        type: "exchange",
-        reverted: false
+        type: "exchange"
       });
       saveAndRender();
     };
@@ -687,7 +701,7 @@ function renderStudentModeProgress() {
   });
 }
 
-function applyScore(student, delta, reason, remark = "") {
+function applyScore(student, delta, reason, remark = "", rule = null) {
   const cls = getCurrentClass();
   if (!cls) return;
   const before = pickStudentSnapshot(student);
@@ -702,9 +716,8 @@ function applyScore(student, delta, reason, remark = "") {
     student.badges += 1;
   }
   const after = pickStudentSnapshot(student);
-  cls.logs.push({
-    id: uid(),
-    time: Date.now(),
+  appendEvent({
+    classId: cls.id,
     studentId: student.id,
     studentName: student.name,
     delta,
@@ -713,13 +726,20 @@ function applyScore(student, delta, reason, remark = "") {
     before,
     after,
     type: "score",
-    reverted: false
+    ruleSnapshot: rule ? {
+      id: rule.id,
+      name: rule.name,
+      score: rule.score,
+      category: rule.category
+    } : null
   });
 }
 
-function undoLog(cls, logId) {
-  const log = cls.logs.find((x) => x.id === logId);
+function undoLog(logId) {
+  const log = state.events.find((x) => x.id === logId);
   if (!log || log.reverted) return;
+  const cls = state.classes.find((x) => x.id === log.classId);
+  if (!cls) return;
   const st = cls.students.find((s) => s.id === log.studentId);
   if (!st) return;
   if (log.before) {
@@ -791,9 +811,9 @@ function createSeedState() {
         createStudent("张三", "一组"),
         createStudent("李四", "一组"),
         createStudent("王五", "二组")
-      ],
-      logs: []
+      ]
     }],
+    events: [],
     currentClassId: clsId,
     rules: structuredClone(DEFAULT_RULES),
     shopItems: structuredClone(DEFAULT_SHOP),
@@ -808,12 +828,13 @@ function loadState() {
       const parsed = JSON.parse(raw);
       return {
         classes: parsed.classes || [],
+        events: normalizeEvents(parsed),
         currentClassId: parsed.currentClassId || "",
         rules: parsed.rules?.length ? parsed.rules : structuredClone(DEFAULT_RULES),
         shopItems: parsed.shopItems?.length ? parsed.shopItems : structuredClone(DEFAULT_SHOP),
         levelExp: parsed.levelExp || 40,
         ui: parsed.ui || { viewMode: "teacher" },
-        sync: parsed.sync || {
+        sync: {
           apiBase: "http://127.0.0.1:8000",
           token: "",
           username: "",
@@ -822,13 +843,18 @@ function loadState() {
           parentChildName: "",
           parentChildId: "",
           inviteCode: "",
-          remoteVersion: 0
+          remoteVersion: 0,
+          eventsVersion: 0,
+          stateEtag: "",
+          eventsEtag: "",
+          ...(parsed.sync || {})
         }
       };
     } catch (_) {}
   }
   return {
     classes: [],
+    events: [],
     currentClassId: "",
     rules: structuredClone(DEFAULT_RULES),
     shopItems: structuredClone(DEFAULT_SHOP),
@@ -843,7 +869,10 @@ function loadState() {
       parentChildName: "",
       parentChildId: "",
       inviteCode: "",
-      remoteVersion: 0
+      remoteVersion: 0,
+      eventsVersion: 0,
+      stateEtag: "",
+      eventsEtag: ""
     }
   };
 }
@@ -891,44 +920,56 @@ function startAutoSync() {
 async function pushRemoteState() {
   if (state.sync.role !== "teacher") return false;
   try {
-    const onlineState = {
-      classes: state.classes,
-      currentClassId: state.currentClassId,
-      rules: state.rules,
-      shopItems: state.shopItems,
-      levelExp: state.levelExp,
-      ui: state.ui
-    };
-    const res = await fetch(`${state.sync.apiBase}/api/state`, {
+    const stateRes = await fetch(`${state.sync.apiBase}/api/state`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${state.sync.token}`
       },
-      body: JSON.stringify({ state: onlineState, baseVersion: state.sync.remoteVersion || 0 })
+      body: JSON.stringify({ state: composeOnlineState(), baseVersion: state.sync.remoteVersion || 0 })
     });
-    const data = await res.json();
-    if (res.status === 409) {
+    const stateData = await stateRes.json();
+    if (stateRes.status === 409) {
       const choice = prompt(
         "检测到多端冲突，请输入处理方式：\n1=以远端覆盖本地\n2=以本地覆盖远端\n3=自动合并后提交\n其他=取消",
         "3"
       );
       if (choice === "1") {
-        applyRemoteState(data.serverState, data.serverVersion || 0);
+        applyRemoteState(stateData.serverState, stateData.serverVersion || 0);
+        await pullRemoteEvents(true);
         saveAndRender();
       } else if (choice === "2") {
-        state.sync.remoteVersion = data.serverVersion || state.sync.remoteVersion || 0;
+        state.sync.remoteVersion = stateData.serverVersion || state.sync.remoteVersion || 0;
         return await pushRemoteState();
       } else if (choice === "3") {
-        const merged = mergeStates(composeOnlineState(), data.serverState || {});
-        applyRemoteState(merged, data.serverVersion || state.sync.remoteVersion || 0);
-        state.sync.remoteVersion = data.serverVersion || state.sync.remoteVersion || 0;
+        const merged = mergeStates(composeOnlineState(), stateData.serverState || {});
+        applyRemoteState(merged, stateData.serverVersion || state.sync.remoteVersion || 0);
+        state.sync.remoteVersion = stateData.serverVersion || state.sync.remoteVersion || 0;
+        await pullRemoteEvents(true);
         return await pushRemoteState();
       }
       return false;
     }
-    if (!res.ok) return false;
-    state.sync.remoteVersion = data.version || state.sync.remoteVersion || 0;
+    if (!stateRes.ok) return false;
+    state.sync.remoteVersion = stateData.version || state.sync.remoteVersion || 0;
+
+    const eventsRes = await fetch(`${state.sync.apiBase}/api/events`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${state.sync.token}`
+      },
+      body: JSON.stringify({ events: state.events || [], baseEventsVersion: state.sync.eventsVersion || 0 })
+    });
+    const eventsData = await eventsRes.json();
+    if (eventsRes.status === 409) {
+      state.sync.eventsVersion = eventsData.serverEventsVersion || state.sync.eventsVersion || 0;
+      const merged = mergeLogs(eventsData.serverEvents || [], state.events || []);
+      state.events = merged;
+      return await pushRemoteState();
+    }
+    if (!eventsRes.ok) return false;
+    state.sync.eventsVersion = eventsData.eventsVersion || state.sync.eventsVersion || 0;
     return true;
   } catch (_) {
     return false;
@@ -937,15 +978,23 @@ async function pushRemoteState() {
 
 async function pullRemoteState() {
   try {
+    const headers = {
+      "Authorization": `Bearer ${state.sync.token}`
+    };
+    if (state.sync.stateEtag) {
+      headers["If-None-Match"] = state.sync.stateEtag;
+    }
     const res = await fetch(`${state.sync.apiBase}/api/state`, {
-      headers: {
-        "Authorization": `Bearer ${state.sync.token}`
-      }
+      headers
     });
+    if (res.status === 304) {
+      return await pullRemoteEvents();
+    }
     const data = await res.json();
     if (!res.ok) return false;
     const remote = data.state;
     state.sync.remoteVersion = data.version || 0;
+    state.sync.stateEtag = res.headers.get("etag") || state.sync.stateEtag || "";
     if (!remote) {
       if (state.sync.role === "teacher") {
         await pushRemoteState();
@@ -953,6 +1002,41 @@ async function pullRemoteState() {
       return true;
     }
     applyRemoteState(remote, state.sync.remoteVersion);
+    return await pullRemoteEvents();
+  } catch (_) {
+    return false;
+  }
+}
+
+async function pullRemoteEvents(force = false) {
+  try {
+    const headers = {
+      "Authorization": `Bearer ${state.sync.token}`
+    };
+    if (!force && state.sync.eventsEtag) {
+      headers["If-None-Match"] = state.sync.eventsEtag;
+    }
+    const pageSize = 200;
+    let page = 1;
+    let total = 0;
+    let all = [];
+    while (true) {
+      const res = await fetch(`${state.sync.apiBase}/api/events?page=${page}&pageSize=${pageSize}`, {
+        headers
+      });
+      if (res.status === 304) {
+        return true;
+      }
+      const data = await res.json();
+      if (!res.ok) return false;
+      all = all.concat(data.events || []);
+      total = data.total || all.length;
+      state.sync.eventsVersion = data.version || state.sync.eventsVersion || 0;
+      state.sync.eventsEtag = res.headers.get("etag") || state.sync.eventsEtag || "";
+      if (all.length >= total) break;
+      page += 1;
+    }
+    state.events = all;
     return true;
   } catch (_) {
     return false;
@@ -979,6 +1063,7 @@ async function pullMe() {
 function applyRemoteState(remote, version) {
   if (!remote) return;
   state.classes = remote.classes || [];
+  state.events = normalizeEvents(remote);
   state.currentClassId = remote.currentClassId || "";
   state.rules = remote.rules?.length ? remote.rules : state.rules;
   state.shopItems = remote.shopItems?.length ? remote.shopItems : state.shopItems;
@@ -1012,10 +1097,10 @@ function mergeStates(localState, remoteState) {
     const rc = classMap.get(c.id);
     rc.name = c.name || rc.name;
     rc.students = mergeById(rc.students || [], c.students || []);
-    rc.logs = mergeLogs(rc.logs || [], c.logs || []);
     classMap.set(c.id, rc);
   }
   merged.classes = [...classMap.values()];
+  merged.events = mergeLogs(merged.events || [], localState.events || []);
   merged.currentClassId = localState.currentClassId || merged.currentClassId || merged.classes[0]?.id || "";
   merged.rules = mergeById(merged.rules || [], localState.rules || []);
   merged.shopItems = mergeById(merged.shopItems || [], localState.shopItems || []);
@@ -1042,7 +1127,7 @@ function calculateWeeklyProgress(cls) {
   const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const map = new Map();
   for (const st of cls.students) map.set(st.id, { studentId: st.id, studentName: st.name, delta: 0 });
-  for (const log of cls.logs) {
+  for (const log of getEventsForClass(cls.id)) {
     if (log.time < since || log.reverted) continue;
     if (typeof log.delta !== "number") continue;
     const item = map.get(log.studentId);
@@ -1054,8 +1139,8 @@ function calculateWeeklyProgress(cls) {
 
 function buildWeeklyReportRows(cls) {
   const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const rows = [["班级", "学生", "时间", "类型", "分值变化", "原因", "备注", "是否撤回"]];
-  for (const log of cls.logs) {
+  const rows = [["班级", "学生", "时间", "类型", "分值变化", "原因", "备注", "规则快照", "是否撤回"]];
+  for (const log of getEventsForClass(cls.id)) {
     if (log.time < since) continue;
     rows.push([
       cls.name,
@@ -1065,10 +1150,39 @@ function buildWeeklyReportRows(cls) {
       String(log.delta ?? 0),
       log.reason || "",
       log.detail || "",
+      log.ruleSnapshot ? JSON.stringify(log.ruleSnapshot) : "",
       log.reverted ? "是" : "否"
     ]);
   }
   return rows;
+}
+
+function appendEvent(event) {
+  state.events.push({
+    id: uid(),
+    time: Date.now(),
+    reverted: false,
+    ...event
+  });
+}
+
+function getEventsForClass(classId) {
+  return (state.events || []).filter((x) => x.classId === classId);
+}
+
+function normalizeEvents(source) {
+  const directEvents = Array.isArray(source.events) ? source.events : [];
+  if (directEvents.length > 0) return directEvents;
+  const migrated = [];
+  for (const cls of source.classes || []) {
+    for (const log of cls.logs || []) {
+      migrated.push({
+        ...log,
+        classId: cls.id
+      });
+    }
+  }
+  return migrated;
 }
 
 function downloadCsv(filename, rows) {
