@@ -51,3 +51,7 @@ python server.py
 
 `feature/ourteacher-benchmark-improve`
 
+## PR增量说明
+
+为满足规范化 PR 流程，本次在功能分支增加此说明段落作为增量提交，用于从功能分支向 `main` 发起可追踪的拉取请求。
+
